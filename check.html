@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>インストールチェック</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="favicon-48.png">
+<style>
+body{margin:0;padding:18px 14px 40px;background:#1b0d22;color:#fff0f8;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;line-height:1.6}
+h1{font-size:18px;margin:0 0 6px}
+p{font-size:13px;color:#e0bfd6;margin:0 0 14px}
+.r{background:rgba(255,255,255,.08);border:1px dotted rgba(255,205,232,.5);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.r b{display:block;font-size:14px}
+.r span{display:block;font-size:12px;color:#e0bfd6;word-break:break-all}
+.r.ng{border-color:#ff9eb5;background:rgba(255,100,140,.16)}
+.r.ok{border-color:rgba(160,255,200,.5)}
+button{width:100%;margin-top:8px;border:2px dotted #fff;border-radius:12px;padding:12px;font-size:14px;font-weight:700;color:#fff;background:linear-gradient(135deg,#ff8fcd,#c56bff);font-family:inherit}
+#ua{font-size:10px;color:#b99ab0;margin-top:14px;word-break:break-all}
+</style>
+</head>
+<body>
+<h1>カラコン手帳 インストールチェック</h1>
+<p>アプリとしてインストールできる状態か、1つずつ調べるよ。❌が出たところが原因だよ。</p>
+<div id="list"></div>
+<button id="again">もう一度チェックする</button>
+<div id="ua"></div>
+<script>
+var L = document.getElementById('list');
+var deferred = null, gotPrompt = false;
+document.getElementById('ua').textContent = navigator.userAgent;
+document.getElementById('again').onclick = function(){ location.reload(); };
+
+function add(state, title, detail){
+  var d = document.createElement('div');
+  d.className = 'r ' + state;
+  d.innerHTML = '<b>' + (state === 'ok' ? '✅ ' : state === 'ng' ? '❌ ' : '⏳ ') + title + '</b><span>' + (detail || '') + '</span>';
+  L.appendChild(d);
+  return d;
+}
+function setRow(d, state, title, detail){
+  d.className = 'r ' + state;
+  d.innerHTML = '<b>' + (state === 'ok' ? '✅ ' : state === 'ng' ? '❌ ' : '⏳ ') + title + '</b><span>' + (detail || '') + '</span>';
+}
+
+window.addEventListener('beforeinstallprompt', function(e){
+  e.preventDefault(); deferred = e; gotPrompt = true;
+});
+
+(async function(){
+  var https = location.protocol === 'https:';
+  add(https ? 'ok' : 'ng', 'https:// で開いてる', https ? '' : 'https:// から始まるURLで開いてね(GitHub Pagesのアドレス)');
+
+  var man = null;
+  try {
+    var r = await fetch('manifest.webmanifest', {cache: 'no-store'});
+    if (!r.ok) throw new Error(r.status);
+    man = await r.json();
+    add('ok', 'manifest.webmanifest が読めた', '名前: ' + man.name + ' / 表示: ' + man.display);
+  } catch (e) {
+    add('ng', 'manifest.webmanifest が読めない', '「404」ならこのファイルがGitHubに置けてないよ (' + e.message + ')');
+  }
+
+  if (man) {
+    var miss = [];
+    ['name', 'start_url', 'display', 'icons'].forEach(function(k){ if (!man[k]) miss.push(k); });
+    add(miss.length ? 'ng' : 'ok', 'manifest の中身', miss.length ? '足りない項目: ' + miss.join(', ') : 'name / start_url / display / icons が揃ってる');
+    var bySize = {};
+    (man.icons || []).forEach(function(i){ bySize[i.sizes] = i; });
+    var need = ['192x192', '512x512'];
+    for (var k = 0; k < need.length; k++) {
+      var ic = bySize[need[k]];
+      if (!ic) { add('ng', 'アイコン ' + need[k], 'manifestに書かれてないよ'); continue; }
+      try {
+        var rr = await fetch(ic.src, {cache: 'no-store'});
+        if (!rr.ok) throw new Error(rr.status);
+        add('ok', 'アイコン ' + need[k] + ' が読めた', ic.src);
+      } catch (e) {
+        add('ng', 'アイコン ' + need[k] + ' が読めない', ic.src + ' が置けてないかも。ファイル名も確認してね (' + e.message + ')');
+      }
+    }
+  }
+
+  var swOk = false;
+  try {
+    var sr = await fetch('sw.js', {cache: 'no-store'});
+    if (!sr.ok) throw new Error(sr.status);
+    swOk = true;
+    add('ok', 'sw.js が読めた', '');
+  } catch (e) {
+    add('ng', 'sw.js が読めない', '「404」ならこのファイルがGitHubに置けてないよ (' + e.message + ')');
+  }
+  if (swOk && 'serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.register('sw.js');
+      var ready = await Promise.race([navigator.serviceWorker.ready, new Promise(function(res){ setTimeout(function(){ res(null); }, 6000); })]);
+      add(ready ? 'ok' : 'ng', 'オフライン用の設定(Service Worker)', ready ? '動き始めてるよ' : 'まだ動いてないよ。ページを開き直して、もう一度チェックしてね');
+    } catch (e) {
+      add('ng', 'Service Worker を登録できなかった', e.message);
+    }
+  }
+
+  add('ok', '今の表示', window.matchMedia('(display-mode: standalone)').matches ? 'アプリとして開いてる' : 'ブラウザで開いてる');
+
+  var box = add('wait', 'Chromeが「インストールできる」と判定したか', '判定を待ってるよ…(最大8秒)');
+  var t0 = Date.now();
+  (function wait(){
+    if (gotPrompt) {
+      setRow(box, 'ok', 'Chromeが「インストールできる」と判定したよ', '下のボタンでインストールできるよ');
+      var b = document.createElement('button');
+      b.textContent = 'アプリとしてインストールする';
+      b.onclick = function(){ deferred.prompt(); };
+      L.appendChild(b);
+    } else if (Date.now() - t0 > 8000) {
+      setRow(box, 'ng', 'Chromeが「インストールできる」とは判定してないよ',
+        '上に❌があれば、それを直すのが先だよ。全部✅なのに出ないときは、すでにインストール済み・Chromeの設定・タイミングのせいのこともあるよ。Chromeを開き直して、もう一度チェックしてね');
+    } else {
+      setTimeout(wait, 300);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
